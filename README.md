@@ -1,15 +1,46 @@
 PySymEmu
 ========
 
-An intel 64 symbolic emulator. 
+A symbolic execution engine for x86/x64 binaries
 
 Ekoparty slides: https://github.com/feliam/pysymemu/blob/master/doc/pysymemu.pdf?raw=true
 
+API documentation: http://feliam.github.io/pysymemu/
+
+Features:
+---------
+* Implements most x86/amd64 instructions
+* Loads ELF32 and ELF64 files
+* Enables to recreate specific machine states by API
+* Instruccion semantics *easy* to read and extend
+* Instruction set can operate in concrete or symbolic values
+* Memory modeled so it can be concrete or symbolic (and is COW-enabled) 
+* Emulation and symbolic states serialiable, meaning that the analisys can be paused/resumed or paralellized(dispy.sourceforge.net)
+* POSIX system calls modeled (Linux32 and Linux64)
+* Automatic generation of instruction testcases / heavelly unittested
+* API and instruction documentation
+
+
 Dependencies:
 -------------
+* distorm3, a disassembler. https://code.google.com/p/distorm/
 * z3, an smt solver. http://z3.codeplex.com/ (1)
 * pyelftool, an ELF parsing library. https://github.com/eliben/pyelftools
-* distorm3, a disassembler. https://code.google.com/p/distorm/
+
+Quick install of deps?
+```
+  echo Installing distorm3
+  svn checkout http://distorm.googlecode.com/svn/trunk/ distorm-read-only
+  cd distorm-read-only
+  python setup.py install
+  cd ..
+  echo Installing pyelftools
+  https://github.com/eliben/pyelftools.git
+  cd pyelftools
+  python setup.py install
+  cd ..
+  #Lets say Z3 depends on arch... 
+```
 
 Directory structure
 -------------------
