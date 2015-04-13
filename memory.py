@@ -43,7 +43,7 @@ class MemoryException(Exception):
         @param cause: exception message.
         @param address: memory address where the exception occurred.
         '''
-        super(MemoryException, self, ).__init__("%s <0x%08x>"%(cause, address))
+        super(MemoryException, self, ).__init__("%s <0x%x>"%(cause, address))
 
 class MMap(object):
     """
@@ -776,7 +776,7 @@ class Memory(object):
         return sorted(result)
 
     def __str__(self):
-        return '\n'.join(["%016x-%016x %s %08x %s"%(start, end, p, offset, filename) for start, end, p, offset, filename in self.mappings()])
+        return '\n'.join(["%016x-%016x % 4s %08x %s"%(start, end, p, offset, filename) for start, end, p, offset, filename in self.mappings()])
 
     def munmap(self, start, size):
         """
@@ -1041,12 +1041,15 @@ class SMemory(Memory):
         @param addr: the address to put a concrete or symbolic content
         @param data: the content to put in C{addr}
         
-        @todo:  if addr is Readable/Executable? Double checked when accesing parent class!!!
+        @todo: if addr is Readable/Executable? Double checked when accesing parent class!
+        @todo: Instead of concretizing all possible values in range raise exception
+               and make executor for arr on each mapped page
+
         """
         if issymbolic(addr):
             logger.debug("Write to symbolic address %s", addr)
             addr_min, addr_max = self.solver.minmax(addr)
-            logger.debug("Range: %x <-> %x", addr_min, addr_max)
+            logger.debug("Range: %x <-> %x Data: %s", addr_min, addr_max, data)
             #Mark and intialize symbolic range
             for i in xrange(addr_min, addr_max+1):
                 if not self.isWriteable(i):
@@ -1055,6 +1058,7 @@ class SMemory(Memory):
                 if not i in self.addr2symbol:
                     self.symbol[i] = self.getchar(i)
                     self.addr2symbol.add(i)
+            
             self.symbol[addr] = chr(data)
         else:
             #concrete addr case
@@ -1084,6 +1088,8 @@ class SMemory(Memory):
             self.solver.add(addr.uge(addr_min))
             self.solver.add(addr.ule(addr_max))
             logger.debug("Range: %x <-> %x", addr_min, addr_max)
+            if addr_max-addr_min > 0x10000000:
+                raise MemoryException("Dangling symbolic pointer[0x%08x-0x%08x]"%(addr_min, addr_max), addr)
             #Symbolic address case
             for i in xrange(addr_min, addr_max+1):
                 if not self.isReadable(i):
@@ -1091,14 +1097,14 @@ class SMemory(Memory):
                 if not i in self.addr2symbol:
                     self.symbol[i] = self.getchar(i)
                     self.addr2symbol.add(i)
-            return self.solver.simplify(self.symbol[addr])
+            return chr(self.solver.simplify(self.symbol[addr]))
 
         if not self.isReadable(addr):
             raise MemoryException("No Access Reading", addr)
 
         #if the pointed value is a symbol...
         if self.isSymbolic(addr):
-            return self.solver.simplify(self.symbol[addr])
+            return chr(self.solver.simplify(self.symbol[addr]))
 
         return super(SMemory, self).getchar(addr)
 

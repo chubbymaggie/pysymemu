@@ -1,7 +1,7 @@
 PySymEmu
 ========
 
-A symbolic execution engine for x86/x64 binaries
+A symbolic execution tool, capable of automatically generating interesting inputs for x86/x64 binary programs.
 
 Ekoparty slides: https://github.com/feliam/pysymemu/blob/master/doc/pysymemu.pdf?raw=true
 
@@ -14,26 +14,25 @@ Features:
 * Enables to recreate specific machine states by API
 * Instruccion semantics *easy* to read and extend
 * Instruction set can operate in concrete or symbolic values
-* Memory modeled so it can be concrete or symbolic (and is COW-enabled) 
+* Memory modeled so it can be concrete or symbolic (and is COW-enabled)
+* Handles operations on symbolic pointers and indexes 
 * Emulation and symbolic states serialiable, meaning that the analisys can be paused/resumed or paralellized(dispy.sourceforge.net)
 * POSIX system calls modeled (Linux32 and Linux64)
 * Automatic generation of instruction testcases
 * API and instruction documentation
-
+* Automatic generation of intruction unittests
+* Multiple SMT solvers supported through pysmtlib (Z3, YICES, CVC4)
 
 Dependencies:
 -------------
-* distorm3, a disassembler. https://code.google.com/p/distorm/
+* Capstone-engine decoder/disassembler. http://www.capstone-engine.org
 * z3, an smt solver. http://z3.codeplex.com/ (1)
 * pyelftool, an ELF parsing library. https://github.com/eliben/pyelftools
 
 Quick install of deps?
 ```
-  echo Installing distorm3
-  svn checkout http://distorm.googlecode.com/svn/trunk/ distorm-read-only
-  cd distorm-read-only
-  python setup.py install
-  cd ..
+  echo Installing Capstone engine
+  sudo pip install capstone
   echo Installing pyelftools
   https://github.com/eliben/pyelftools.git
   cd pyelftools
@@ -60,7 +59,7 @@ Tests
 -----
 You may use the discover command.
 
-``` $ python -m unittest discover```
+``` $ python -m unittest discover test```
 
 Note that cpu.py testcases are generated semi-automatically using tools at test/auto
 
