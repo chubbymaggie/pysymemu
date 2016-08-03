@@ -35,7 +35,7 @@ from capstone import *
 from capstone.x86 import *
 CapRegisters = ['(INVALID)', 'AH', 'AL', 'AX', 'BH', 'BL', 'BP', 'BPL', 'BX', 'CH', 'CL', 'CS', 'CX', 'DH', 'DI', 'DIL', 'DL', 'DS', 'DX', 'EAX', 'EBP', 'EBX', 'ECX', 'EDI', 'EDX', 'RFLAGS', 'EIP', 'EIZ', 'ES', 'ESI', 'ESP', 'FPSW', 'FS', 'GS', 'IP', 'RAX', 'RBP', 'RBX', 'RCX', 'RDI', 'RDX', 'RIP', 'RIZ', 'RSI', 'RSP', 'SI', 'SIL', 'SP', 'SPL', 'SS', 'CR0', 'CR1', 'CR2', 'CR3', 'CR4', 'CR5', 'CR6', 'CR7', 'CR8', 'CR9', 'CR10', 'CR11', 'CR12', 'CR13', 'CR14', 'CR15', 'DR0', 'DR1', 'DR2', 'DR3', 'DR4', 'DR5', 'DR6', 'DR7', 'FP0', 'FP1', 'FP2', 'FP3', 'FP4', 'FP5', 'FP6', 'FP7', 'K0', 'K1', 'K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'MM0', 'MM1', 'MM2', 'MM3', 'MM4', 'MM5', 'MM6', 'MM7', 'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15', 'ST0', 'ST1', 'ST2', 'ST3', 'ST4', 'ST5', 'ST6', 'ST7', 'XMM0', 'XMM1', 'XMM2', 'XMM3', 'XMM4', 'XMM5', 'XMM6', 'XMM7', 'XMM8', 'XMM9', 'XMM10', 'XMM11', 'XMM12', 'XMM13', 'XMM14', 'XMM15', 'XMM16', 'XMM17', 'XMM18', 'XMM19', 'XMM20', 'XMM21', 'XMM22', 'XMM23', 'XMM24', 'XMM25', 'XMM26', 'XMM27', 'XMM28', 'XMM29', 'XMM30', 'XMM31', 'YMM0', 'YMM1', 'YMM2', 'YMM3', 'YMM4', 'YMM5', 'YMM6', 'YMM7', 'YMM8', 'YMM9', 'YMM10', 'YMM11', 'YMM12', 'YMM13', 'YMM14', 'YMM15', 'YMM16', 'YMM17', 'YMM18', 'YMM19', 'YMM20', 'YMM21', 'YMM22', 'YMM23', 'YMM24', 'YMM25', 'YMM26', 'YMM27', 'YMM28', 'YMM29', 'YMM30', 'YMM31', 'ZMM0', 'ZMM1', 'ZMM2', 'ZMM3', 'ZMM4', 'ZMM5', 'ZMM6', 'ZMM7', 'ZMM8', 'ZMM9', 'ZMM10', 'ZMM11', 'ZMM12', 'ZMM13', 'ZMM14', 'ZMM15', 'ZMM16', 'ZMM17', 'ZMM18', 'ZMM19', 'ZMM20', 'ZMM21', 'ZMM22', 'ZMM23', 'ZMM24', 'ZMM25', 'ZMM26', 'ZMM27', 'ZMM28', 'ZMM29', 'ZMM30', 'ZMM31', 'R8B', 'R9B', 'R10B', 'R11B', 'R12B', 'R13B', 'R14B', 'R15B', 'R8D', 'R9D', 'R10D', 'R11D', 'R12D', 'R13D', 'R14D', 'R15D', 'R8W', 'R9W', 'R10W', 'R11W', 'R12W', 'R13W', 'R14W', 'R15W']
 
-from smtlibv2 import ITEBV as ITE, Bool, BitVec, Array, issymbolic, ZEXTEND, SEXTEND, ord, chr, OR, AND, CONCAT, UDIV, UREM, ULT, UGT, ULE, EXTRACT, isconcrete
+from smtlib import ITEBV as ITE, Bool, BitVec, Array, issymbolic, ZEXTEND, SEXTEND, ord, chr, OR, AND, CONCAT, UDIV, UREM, ULT, UGT, ULE, EXTRACT, isconcrete
 
 import logging
 logger = logging.getLogger("CPU")
@@ -50,6 +50,13 @@ class DecodeException(Exception):
         self.bytes=bytes
         self.extra=extra
 
+class InvalidPCException(Exception):
+    ''' Exception raised when you try to execute invalid or not executable memory
+    '''
+    def __init__(self, pc):
+        super(InvalidPCException, self).__init__("Trying to execute invalid memory @%08x", pc)
+        self.pc=pc
+
 class InstructionNotImplemented(Exception):
     ''' Exception raised when you try to execute an instruction that is
         not yet implemented in the emulator.
@@ -60,7 +67,6 @@ class InstructionNotImplemented(Exception):
 class DivideError(Exception):
     ''' A division by zero '''
     pass
-
 
 class Interruption(Exception):
     ''' '''
@@ -119,24 +125,26 @@ def rep(old_method):
         if (X86_PREFIX_REP in prefix) or (X86_PREFIX_REPNE in prefix):
             counter_name = {16: 'CX', 32: 'ECX', 64: 'RCX'}[cpu.instruction.addr_size*8] 
             count = cpu.getRegister(counter_name)
-
             if issymbolic(count):
                 raise SymbolicLoopException(counter_name)
 
-            cpu.IF = count > 0
+            cpu.IF = count != 0
 
             #Repeate!
             if cpu.IF:
+                old_method(cpu, *args, **kw_args)
                 count -= 1
-                cpu.setRegister(counter_name, count)
+
                 #if 'FLAG_REPNZ' in cpu.instruction.flags:
                 if X86_PREFIX_REP in prefix:
-                    cpu.IF = count != 0
+                    cpu.IF = count !=0 #AND(cpu.ZF == False, count != 0)  #true IF means loop
                 #elif 'FLAG_REPZ' in cpu.instruction.flags:
                 elif X86_PREFIX_REPNE in prefix:
-                    cpu.IF = AND(cpu.ZF == False, count != 0)
+                    cpu.IF = cpu.ZF == False  #true IF means loop
+
+                cpu.setRegister(counter_name, count)
+
                 cpu.PC = ITE(cpu.AddressSize, cpu.IF, cpu.PC, cpu.PC + cpu.instruction.size)
-                old_method(cpu, *args, **kw_args)
 
             #Advance!
             else:
@@ -776,16 +784,16 @@ class Cpu(object):
             seg = cpu.instruction.reg_name(o.mem.segment).upper()
             if seg in cpu.segments:
                 address += cpu.segments[seg][cpu.getRegister(seg)]
+
         if o.mem.base != 0:
             base = cpu.instruction.reg_name(o.mem.base).upper()
-
             address += cpu.getRegister(base)
         if o.mem.index != 0:
             index = cpu.instruction.reg_name(o.mem.index).upper()
             address += o.mem.scale*cpu.getRegister(index)
         if o.mem.disp != 0:
             address += o.mem.disp
-
+ 
         return address & ((1<<cpu.AddressSize)-1)
 
     def readOperandCapstone(cpu, o):
@@ -947,14 +955,11 @@ class Cpu(object):
         if not isinstance(cpu.PC, (int,long)):
             raise SymbolicPCException(cpu.PC)
 
+        if not cpu.mem.isExecutable(cpu.PC):
+            raise InvalidPCException(cpu.PC)
+
         instruction = cpu.getInstructionCapstone(cpu.PC)
-        #instruction_cap = cpu.getInstructionCapstone(cpu.PC)
-        #instruction = cpu.getInstructionDistorm(cpu.PC)
-
-        
-
         cpu.instruction = instruction #FIX
-
 
         #Check if we already have an implementation...
         name = instruction.insn_name().upper()
@@ -966,27 +971,26 @@ class Cpu(object):
             name = 'CMOVZ'
         if name == 'CMOVNE':
             name = 'CMOVNZ'
-
+        if name in ['MOVUPS', 'MOVABS']:
+            name = 'MOV'
         if instruction.mnemonic.upper() in ['REP MOVSB', 'REP MOVSW', 'REP MOVSD']:
             name = 'MOVS'
-        if name == 'MOVABS':
-            name='MOV'
         if name == 'SETNE':
             name = 'SETNZ'
         if name == 'SETE':
             name = 'SETZ'
-        if instruction.mnemonic.upper() in ['REP STOSD', 'REP STOSB' , 'REP STOSW']:
+        if name in ['STOSD', 'STOSB' , 'STOSW', 'STOSQ']:
             name = 'STOS'
+
+        if name in ['SCASD', 'SCASB' , 'SCASW', 'SCASQ']:
+            name = 'SCAS'
 
         if not hasattr(cpu, name):
             raise InstructionNotImplemented( "Instruction %s at %x Not Implemented (text: %s)" % 
                     (name, cpu.PC, str(instruction.bytes).encode('hex')) )
         #log
         if logger.level == logging.DEBUG :
-            if True:
-                logger.debug("INSTRUCTION: 0x%016x:\t%s\t%s", instruction.address, instruction.mnemonic, instruction.op_str)
-            else:
-                logger.debug("INSTRUCTION: %016x %s", cpu.PC, instruction)
+            logger.debug("INSTRUCTION: 0x%016x:\t%s\t%s", instruction.address, instruction.mnemonic, instruction.op_str)
             for l in cpu.dumpregs().split('\n'):
                 logger.debug(l)
 
@@ -1834,19 +1838,32 @@ class Cpu(object):
         @param cpu: current CPU.
         @param src: source operand.        
         '''
-        reg_name_h = { 16: 'AH', 32: 'DX', 64:'EDX', 128:'RDX'}[src.size*2]
-        reg_name_l = { 16: 'AL', 32: 'AX', 64:'EAX', 128:'RAX'}[src.size*2]
-        dividend = CONCAT(src.size, cpu.getRegister(reg_name_h), cpu.getRegister(reg_name_l))
-        #divisor = src.read()
-        divisor = ZEXTEND(src.read(), src.size * 2)
 
+        reg_name_h = { 8: 'AH', 16: 'DX', 32:'EDX', 64:'RDX'}[src.size]
+        reg_name_l = { 8: 'AL', 16: 'AX', 32:'EAX', 64:'RAX'}[src.size]
+        dividend = CONCAT(src.size, cpu.getRegister(reg_name_h), cpu.getRegister(reg_name_l))
+        
+
+        #divisor = src.read()
+        divisor = SEXTEND(src.read(), src.size, src.size * 2)
         if isinstance(divisor, (int,long)) and divisor == 0:
             raise DivideError()
 
+        divisor_sign = divisor >= (1<<(src.size*2-1))
+        if type(divisor) in (int, long):
+            if divisor_sign:
+                divisor -= 1<<(src.size*2) -1
+                divisor = divisor & ((1<<(src.size*2))-1)
+
         quotient = dividend / divisor
-        if isinstance(quotient, (int,long)) and quotient > (1<<src.size)-1:
-            raise DivideError()
-        reminder = dividend % divisor
+        reminder = dividend - (dividend / divisor *divisor)
+
+        if not divisor_sign:
+            reminder = -reminder 
+        quotient = ITE(src.size * 2, reminder != 0, quotient +1, quotient)
+
+        #if reminder > (1<<src.size)-1:
+        #    raise DivideError()
 
         #cpu.setRegister(reg_name_l, quotient)
         #cpu.setRegister(reg_name_h, reminder)
@@ -3820,7 +3837,7 @@ class Cpu(object):
         SIGN_MASK = 1<<(OperandSize-1)
 
         cpu.CF = (tempCount==0) & cpu.CF | (tempCount!=0) & (tempDest & (1<< (OperandSize-tempCount)) != 0)
-        cpu.OF = (tempCount==0) & cpu.OF | (tempCount!=0) & ( (res & SIGN_MASK  ^ cpu.CF) )
+        #cpu.OF = (tempCount==0) & cpu.OF | (tempCount!=0) & ( (res & SIGN_MASK  ^ cpu.CF) )
         cpu.SF = (tempCount==0) & cpu.SF | (tempCount!=0) & ((res & SIGN_MASK) != 0)
         cpu.ZF = (tempCount==0) & cpu.ZF | (tempCount!=0) & (res == 0)
         cpu.PF = (tempCount==0) & cpu.PF | (tempCount!=0) & ((res ^ res>>1 ^ res>>2 ^ res>>3 ^ res>>4 ^ res>>5 ^ res>>6 ^ res>>7)&1 == 0)
@@ -3888,9 +3905,8 @@ class Cpu(object):
         @param src: count operand.
         '''
         OperandSize = dest.size
-        count = ZEXTEND(src.read() & ((1<<OperandSize) -1), OperandSize)
+        count = ZEXTEND(src.read() & (OperandSize-1) , OperandSize)
         value = dest.read()
-
         res = dest.write(value >> count) #UNSIGNED UDIV2 !! TODO Check
 
         #cpu.calculateFlags('SHR', OperandSize, res, tempDest, tempCount)
@@ -4067,21 +4083,24 @@ class Cpu(object):
     @instruction
     def BT(cpu, dest, src):
         ''' 
-        Bit test.
+        Bit Test.
         
-        Selects the bit in a bit string (specified with the first operand, called 
-        the bit base) at the bit-position designated by the bit offset operand 
-        (second operand) and stores the value of the bit in the CF flag.
+        Selects the bit in a bit string (specified with the first operand, called the bit base) at the 
+        bit-position designated by the bit offset (specified by the second operand) and stores the value 
+        of the bit in the CF flag. The bit base operand can be a register or a memory location; the bit 
+        offset operand can be a register or an immediate value:
+            - If the bit base operand specifies a register, the instruction takes the modulo 16, 32, or 64 
+              of the bit offset operand (modulo size depends on the mode and register size; 64-bit operands 
+              are available only in 64-bit mode).
+            - If the bit base operand specifies a memory location, the operand represents the address of the 
+              byte in memory that contains the bit base (bit 0 of the specified byte) of the bit string. The 
+              range of the bit position that can be referenced by the offset operand depends on the operand size.
         
         @param cpu: current CPU.
-        @param dest: bit base operand.
-        @param src: bit offset operand.
+        @param dest: bit base.
+        @param src: bit offset.
         '''
-        assert dest.type == 'Register'
-        value = dest.read()
-        pos = src.read()%dest.size
-        cpu.CF = value & (1<<pos) == 1<<pos
-
+        cpu.CF = ((dest.read() >> (src.read()%dest.size) ) &1) !=0
 
     @instruction
     def BTC(cpu, dest, src):
@@ -4310,12 +4329,6 @@ class Cpu(object):
         cpu.setRegister(src_reg, cpu.getRegister(src_reg) + increment)
         cpu.setRegister(dest_reg, cpu.getRegister(dest_reg) + increment)
 
-    def SCASB(cpu, dest, src):
-        cpu.SCAS(dest, src)
-
-    def SCASW(cpu, dest, src):
-        cpu.SCAS(dest, src)
-
     @rep
     def SCAS(cpu, dest, src):
         ''' 
@@ -4364,21 +4377,12 @@ class Cpu(object):
         size = dest.size
         arg0 = dest.read()
         arg1 = src.read()
-        res = arg1 - arg0
+        res = arg0 - arg1
         cpu.calculateFlags('SUB', size, res, arg1, arg0)
+        #cpu.ZF =  arg1 == arg0
 
         increment = ITE(cpu.AddressSize, cpu.DF, -size/8, size/8)
         cpu.setRegister(mem_reg, cpu.getRegister(mem_reg) + increment)
-
-
-    def STOSD(cpu, dest, src):
-        cpu.STOS(dest, src)
-
-    def STOSQ(cpu, dest, src):
-        cpu.STOS(dest, src)
-
-    def STOSB(cpu, dest, src):
-        cpu.STOS(dest, src)
 
     @rep
     def STOS(cpu, dest, src):
@@ -4718,7 +4722,15 @@ class Cpu(object):
         @param op0: destination operand.
         @param op1: source operand. 
         '''
+#        x, size_src, size_dest = op1.read(), op1.size, op0.size
+#        if type(x) in (int, long):
+#            if x >= (1<<(size_src-1)):
+#                x -= 1<<size_src
+#            print "AAA", x & ((1<<size_dest)-1), 1<<(size_src-1)
+
+#        print op1.read(), op1.size, op0.size, SEXTEND(op1.read(), op1.size, op0.size)
         op0.write(SEXTEND(op1.read(), op1.size, op0.size))
+#        op0.write(x)
 
     @instruction
     def MOVSXD(cpu, op0, op1):
@@ -4867,28 +4879,6 @@ class Cpu(object):
         Performs no operation.
         '''
         pass
-    @instruction
-    def BT(cpu, dest, src):
-        ''' 
-        Bit Test.
-        
-        Selects the bit in a bit string (specified with the first operand, called the bit base) at the 
-        bit-position designated by the bit offset (specified by the second operand) and stores the value 
-        of the bit in the CF flag. The bit base operand can be a register or a memory location; the bit 
-        offset operand can be a register or an immediate value:
-            - If the bit base operand specifies a register, the instruction takes the modulo 16, 32, or 64 
-              of the bit offset operand (modulo size depends on the mode and register size; 64-bit operands 
-              are available only in 64-bit mode).
-            - If the bit base operand specifies a memory location, the operand represents the address of the 
-              byte in memory that contains the bit base (bit 0 of the specified byte) of the bit string. The 
-              range of the bit position that can be referenced by the offset operand depends on the operand size.
-        
-        @param cpu: current CPU.
-        @param dest: bit base.
-        @param src: bit offset.
-        '''
-        cpu.CF = (dest.read() >> (src.read()%dest.size) ) &1
-
 
     @instruction
     def SYSCALL(cpu):
@@ -4922,8 +4912,13 @@ class Cpu(object):
         @param dest: destination operand.
         @param src: source operand.
         '''
-        
-        dest.write(src.read())
+        if dest.size > src.size: 
+            high = dest.read()                    &     (((1<< (dest.size/2))-1) << (dest.size/2))
+            low  = ZEXTEND(src.read(), dest.size) &     ((1<< (dest.size/2))-1)
+            dest.write(high|low)
+        else:
+            dest.write(EXTRACT(0,dest.size,src.read()))
+
 
     @instruction
     def MOVHPD(cpu, dest, src):
@@ -5212,16 +5207,16 @@ DEST[255:0] <- SRC[255:0]
         raise NotImplemented()
     @instruction
     def PINSRW(cpu, dest, src, count):
-        if src.size == 64:
+        if dest.size == 64:
             #PINSRW instruction with 64-bit source operand:
-            sel = count & 3
+            sel = count.read() & 3
             mask = [0x000000000000FFFF, 0x00000000FFFF0000, 0x0000FFFF00000000, 0xFFFF000000000000 ][sel]
         else:
             #PINSRW instruction with 128-bit source operand
-            assert src.size == 128
-            sel = count & 7
+            assert dest.size == 128
+            sel = count.read() & 7
             mask = [0x0000000000000000000000000000FFFF,0x000000000000000000000000FFFF0000,0x00000000000000000000FFFF00000000,0x0000000000000000FFFF000000000000,0x000000000000FFFF0000000000000000,0x00000000FFFF00000000000000000000,0x0000FFFF000000000000000000000000,0xFFFF0000000000000000000000000000][sel]
-        dest.write( (dest.read() & ~mask) |  ((src.read() << (sel * 16)) & mask) )
+        dest.write( (dest.read() & ~mask) |  ((ZEXTEND(src.read(),dest.size) << (sel * 16)) & mask) )
 
     @instruction
     def PEXTRW(cpu, dest, src, count):

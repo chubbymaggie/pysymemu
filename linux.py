@@ -2,7 +2,7 @@ import weakref
 import sys, os, fcntl, struct
 import cpu
 
-from smtlibv2 import chr, ord
+from smtlib import chr, ord
 from elftools.elf.elffile import ELFFile
 from contextlib import closing
 
@@ -15,13 +15,11 @@ class SyscallNotImplemented(Exception):
         system call. Go to linux.py and add it!
     '''
     def __init__(self, mode, number):
-        self.mode = mode
-        self.number
-        super(Exception, self).__init__("%s bit system call number %s Not Implemented", mode, number)
+        super(Exception, self).__init__("%s bit system call number %s Not Implemented" % (mode, number))
 
 class ProcessExit(Exception):
     def __init__(self, code):
-        super(Exception, self).__init__("Process exited correctly. Code: %s", code)
+        super(Exception, self).__init__("Process exited correctly. Code: %s" % code)
 
 
 
@@ -318,13 +316,14 @@ class Linux(object):
         logger.debug("Main elf bss:%x"%elf_bss)
         logger.debug("Main elf brk %x:"%elf_brk)
 
+        saved_perms = self.mem.getPermissions(elf_bss)
         self.mem.mprotect(self.mem._floor(elf_bss), elf_brk-elf_bss, 'rw')
         for i in xrange(elf_bss, elf_brk):
             try:
                 self.mem.putchar(i, '\x00')
             except Exception, e:
                 logger.debug("Exception zeroing main elf fractional pages: %s"%str(e))
-        #TODO: FIX mprotect as it was before zeroing?
+        self.mem.mprotect(self.mem._floor(elf_bss), elf_brk-elf_bss, saved_perms)
 
         reserved = self.mem.mmap(base+vaddr+memsz,0x1000000,'   ')
         interpreter_base = 0
@@ -439,6 +438,12 @@ class Linux(object):
         # ----------------------------------------------------------------------
         argvlst=[]
         envplst=[]
+
+
+        stack-=16
+        cpu.write(stack, "A"*16)
+        AT_RANDOM = stack
+
         #end envp marker empty string
         stack-=1
         cpu.write(stack,'\x00')
@@ -479,6 +484,7 @@ class Linux(object):
                             14, 1000, 
                             17, 100, 
                             23, 0,
+                            25, AT_RANDOM,
                             0, 0]):
             stack-=bsz
             cpu.store(stack,i,addressbitsize)
@@ -628,6 +634,7 @@ class Linux(object):
         '''
         data = self.files[fd].read(count)
         cpu.write(buf, data)
+        logger.debug("READ %d %x %d -> %s",fd,buf,count,repr(data[:10]))
         return len(data)
 
     def sys_close(self, cpu, fd):
@@ -848,6 +855,25 @@ class Linux(object):
                 value = str(value)
             self.files[fd].write(value)
         return size 
+
+    def sys_readlink(self, cpu, path, buf, bufsize):
+        '''
+        Read
+        @rtype: int
+        
+        @param cpu: current CPU.
+        @param path: the "link path id"
+        @param buf: the buffer where the bytes will be putted. 
+        @param bufsize: the max size for read the link.
+        @todo: Out eax number of bytes actually sent | EAGAIN | EBADF | EFAULT | EINTR | EINVAL | EIO | ENOSPC | EPIPE
+        '''
+        if bufsize <= 0:
+            return -EINVAL
+        filename = self._read_string(cpu, path)
+        data = os.readlink(filename)[:bufsize]
+        cpu.write(buf, data)
+        logger.debug("READLINK %d %x %d -> %s",path,buf,bufsize,repr(data[:10]))
+        return len(data[:bufsize])
 
     def sys_exit_group(self, cpu, error_code):
         '''
@@ -1163,7 +1189,7 @@ class Linux(object):
 
                 }
         if cpu.RAX not in syscalls.keys():
-            raise SyscallNotImplemented("64 bit system call number %s Not Implemented", cpu.RAX)
+            raise SyscallNotImplemented(64, cpu.RAX)
 
         func = syscalls[cpu.RAX]
         logger.debug("SYSCALL64: %s (nargs: %d)", func.func_name, func.func_code.co_argcount)
@@ -1186,6 +1212,7 @@ class Linux(object):
                      0x00000025: self.sys_kill,
                      0x0000002d: self.sys_brk,
                      0x00000036: self.sys_ioctl,
+                     0x00000055: self.sys_readlink,
                      0x00000059: self.sys_acct,
                      0x0000005b: self.sys_munmap,
                      0x0000007a: self.sys_uname, 
@@ -1208,7 +1235,7 @@ class Linux(object):
                      0x00000014: self.sys_getpid,
                     }
         if cpu.EAX not in syscalls.keys():
-            raise SyscallNotImplemented("32 bit system call number %s Not Implemented" % cpu.EAX)
+            raise SyscallNotImplemented(32, cpu.EAX)
         func = syscalls[cpu.EAX]
         logger.debug("SYSCALL32: %s (nargs: %d)", func.func_name, func.func_code.co_argcount)
         nargs = func.func_code.co_argcount
@@ -1529,11 +1556,13 @@ class SymbolicFile(object):
                 self.array[i] = data[i]
             else:
                 symbols_cnt+=1
-        if symbols_cnt > max_size:
-            logger.warning("Found more free symbolic vlues than allowed (%d > %d)",symbols_cnt, max_size)
 
         self.pos = 0
         self.max_size=min(len(data), max_size)
+        if symbols_cnt > max_size:
+            logger.warning("Found more free symbolic values than allowed (%d > %d)",symbols_cnt, max_size)
+        else:
+            logger.info("Found %d free symbolic values on file %s",symbols_cnt, path.name)
 
     def __getstate__(self):
         state = {}
